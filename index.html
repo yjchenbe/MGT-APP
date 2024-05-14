@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>郵件與聊天信息顯示示例</title>
+    <!-- 加載 Microsoft Graph Toolkit 和 MSAL -->
+    <script src="https://unpkg.com/@microsoft/mgt@3/dist/bundle/mgt-loader.js"></script>
+    <script src="https://alcdn.msauth.net/browser/2.13.1/js/msal-browser.js" crossorigin="anonymous"></script>
+</head>
+<body>
+    <!-- Microsoft Graph Toolkit 登錄和代理設定 -->
+    <mgt-msal2-provider client-id="014a2b85-1a79-4a7a-b83b-450cdca80ea8"></mgt-msal2-provider>
+    <mgt-login></mgt-login>
+    <mgt-agenda></mgt-agenda>
+    <mgt-people-picker></mgt-people-picker>
+
+    <!-- 從 Microsoft Graph API 取得郵件 -->
+    <div>
+        <h1>郵件資訊</h1>
+        <mgt-get resource="/me/messages" scopes="mail.read" version="v1.0">
+            <template>
+                <div>
+                    <div data-for="email in value.slice(0, 5)">
+                        <p><strong>主題:</strong> <span>{{email.subject}}</span></p>
+                        <p><strong>內容預覽:</strong> <span>{{email.bodyPreview}}</span></p>
+                        <p><strong>發送者:</strong> <span>{{email.sender.emailAddress.name}}</span></p>
+                        <hr>
+                    </div>
+                </div>
+            </template>
+        </mgt-get>
+    </div>
+
+    <!-- 聊天信息顯示 -->
+    <div>
+        <h1>聊天信息</h1>
+        <div id="chatData">載入中...</div>
+    </div>
+
+    <script>
+        const msalConfig = {
+            auth: {
+                clientId: '014a2b85-1a79-4a7a-b83b-450cdca80ea8',
+                authority: 'https://login.microsoftonline.com/common',
+                redirectUri: 'http://localhost:3000/index.html' // 確保這裡的 URI 與 Azure AD 中配置的一致
+            }
+        };
+
+        const msalInstance = new msal.PublicClientApplication(msalConfig);
+
+        function signIn() {
+            console.log("Starting sign-in process...");
+            msalInstance.loginPopup({
+                scopes: ["Chat.Read"],
+                prompt: "select_account"
+            }).then((loginResponse) => {
+                console.log("Login successful:", loginResponse);
+                getChats();
+            }).catch((error) => {
+                console.error("Error during login:", error);
+                document.getElementById('chatData').textContent = "Error during login: " + error;
+            });
+        }
+
+        function getChats() {
+            console.log("Acquiring token silently...");
+            const accounts = msalInstance.getAllAccounts();
+            if (accounts.length > 0) {
+                msalInstance.acquireTokenSilent({
+                    scopes: ["Chat.Read"],
+                    account: accounts[0]
+                }).then((response) => {
+                    console.log("Token acquired:", response.accessToken);
+                    fetchChats(response.accessToken);
+                }).catch((error) => {
+                    console.error("Error acquiring token silently:", error);
+                    document.getElementById('chatData').textContent = "Error acquiring token silently: " + error;
+                });
+            } else {
+                console.log("No accounts found, signing in...");
+                signIn();
+            }
+        }
+
+        function fetchChats(accessToken) {
+            console.log("Fetching chats...");
+            fetch("https://graph.microsoft.com/v1.0/me/chats?$expand=members", {
+                headers: {
+                    "Authorization": `Bearer ${accessToken}`
+                }
+            }).then(response => {
+                console.log("API response received:", response);
+                return response.json();
+            }).then(data => {
+                console.log("Chats data:", data);
+                displayChats(data, accessToken);
+            }).catch((error) => {
+                console.error("Error fetching chats:", error);
+                document.getElementById('chatData').textContent = "Error fetching chats: " + error;
+            });
+        }
+
+        function displayChats(data, accessToken) {
+            const chatDataElement = document.getElementById('chatData');
+            chatDataElement.innerHTML = '';  // Clear previous content
+
+            data.value.forEach(chat => {
+                if (chat.chatType === "meeting") {
+                    return;  // Skip chats of type 'meeting'
+                }
+
+                const chatMembers = chat.members.map(member => member.displayName).join(', ');
+                let chatTopic = chat.topic ? chat.topic : "無主題";
+                if (chat.chatType === "oneOnOne") {
+                    const otherMember = chat.members.find(member => member.userId !== msalInstance.getAllAccounts()[0].homeAccountId.split('.')[0]);
+                    chatTopic = otherMember ? `與${otherMember.displayName}的對話` : "與未知成員的對話";
+                }
+
+                const chatInfo = `
+                    <div>
+                        <p><strong>主題:</strong> ${chatTopic}</p>
+                        <p><strong>成員:</strong> ${chatMembers}</p>
+                        <p><strong>最近的看過訊息時間:</strong> ${chat.viewpoint.lastMessageReadDateTime}</p>
+                        <div id="messages-${chat.id}">載入消息中...</div>
+                        <hr>
+                    </div>
+                `;
+
+                chatDataElement.innerHTML += chatInfo;
+
+                // Fetch the latest message for each chat
+                fetchLatestMessage(chat.id, accessToken);
+            });
+        }
+
+        function fetchLatestMessage(chatId, accessToken) {
+            fetch(`https://graph.microsoft.com/v1.0/chats/${chatId}/messages?$top=1`, {
+                headers: {
+                    "Authorization": `Bearer ${accessToken}`
+                }
+            }).then(response => {
+                return response.json();
+            }).then(data => {
+                console.log(`Latest message for chat ${chatId}:`, data);
+                const messagesElement = document.getElementById(`messages-${chatId}`);
+                if (data.value.length > 0) {
+                    const message = data.value[0];
+                    messagesElement.innerHTML = `
+                        <p><strong>發送者:</strong> ${message.from?.user?.displayName || "未知"} - <strong>內容:</strong> ${message.body.content}</p>
+                    `;
+                } else {
+                    messagesElement.textContent = "無消息";
+                }
+            }).catch((error) => {
+                console.error(`Error fetching messages for chat ${chatId}:`, error);
+                const messagesElement = document.getElementById(`messages-${chatId}`);
+                messagesElement.textContent = "Error fetching messages: " + error;
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            console.log("Document loaded. Checking for accounts...");
+            if (msalInstance.getAllAccounts().length > 0) {
+                getChats();
+            } else {
+                signIn();
+            }
+        });
+    </script>
+</body>
+</html>

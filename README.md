@@ -75,3 +75,7 @@ Any form of contribution is welcome! Please send a Pull Request or submit an iss
 ## **License**
 This project is licensed under the MIT License.
 
+## **Reference**
+
+[Get started with Microsoft Graph Toolkit ](https://learn.microsoft.com/en-us/training/modules/msgraph-toolkit-intro/1-introduction)
+
